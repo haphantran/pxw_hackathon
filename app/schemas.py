@@ -247,7 +247,7 @@ class SankeyRequest(BaseModel):
     account_codes: List[str]
     sankey_levels: List[str] = Field(
         default_factory=lambda: [
-            "account.AccountType",
+            "account.account_type",
             "security.security_currency_code",
             "security.asset_class_level_1_name",
         ]
@@ -300,3 +300,27 @@ class AvailableSankeyColumnsRequest(BaseModel):
     """Request schema for getting available Sankey columns - no parameters needed"""
 
     pass
+
+
+class PerformanceAttributionRequest(BaseModel):
+    start_date: date
+    end_date: date
+    account_codes: List[str]
+    attribution_levels: List[str]  # e.g., ["fx", "dividends", "appreciation", "securities", "fees"]
+
+
+class PerformanceNode(BaseModel):
+    label: str
+    category: str  # "meta", "contribution", "gain_loss", "attribution", "security"
+
+
+class PerformanceLink(BaseModel):
+    source: int
+    target: int
+    value: float
+    attribution_type: str  # "contribution", "fx_gain", "dividend", "appreciation", "fee"
+
+
+class PerformanceSankeyResponse(BaseModel):
+    nodes: List[PerformanceNode]
+    links: List[PerformanceLink]

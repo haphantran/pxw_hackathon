@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from . import models, schemas, queries
 from typing import List
+from decimal import Decimal
 
 
 # dim_accounts
@@ -84,9 +85,11 @@ def get_holdings_by_account(db: Session, account_code: str):
 def get_aggregated_holdings(
     db: Session, request: schemas.HoldingsAggregationRequest
 ) -> List[schemas.AggregatedHolding]:
+    account_group_by = request.account_group_by_clause if request.account_group_by_clause is not None else []
+    security_group_by = request.security_group_by_clause if request.security_group_by_clause is not None else []
     query = queries.get_aggregated_holdings_query(
-        account_group_by_clause=request.account_group_by_clause,
-        security_group_by_clause=request.security_group_by_clause,
+        account_group_by_clause=account_group_by,
+        security_group_by_clause=security_group_by,
     )
     results = db.execute(
         query, {"as_of_date": request.as_of_date, "account_codes": tuple(request.account_codes)}
@@ -95,9 +98,9 @@ def get_aggregated_holdings(
     aggregated_holdings = []
     for row in results:
         group = {}
-        for col in request.account_group_by_clause:
+        for col in account_group_by:
             group[col] = getattr(row, col)
-        for col in request.security_group_by_clause:
+        for col in security_group_by:
             group[col] = getattr(row, col)
 
         aggregated_holdings.append(schemas.AggregatedHolding(group=group, total_market_value=row.total_market_value))
@@ -270,3 +273,120 @@ def get_available_dates_for_accounts(
         earliest_date=earliest_date,
         latest_date=latest_date,
     )
+
+
+class PerformanceSankeyService:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def generate_sankey_data(self, start_date, end_date, account_codes, attribution_levels):
+        # 1. Get top-level numbers
+        params = {"start_date": start_date, "end_date": end_date, "account_codes": tuple(account_codes)}
+
+        market_values_result = self.db.execute(queries.GET_MARKET_VALUES, params).first()
+        start_mva = Decimal(0)
+        end_mva = Decimal(0)
+        if market_values_result:
+            start_mva = market_values_result.start_mva or Decimal(0)
+            end_mva = market_values_result.end_mva or Decimal(0)
+
+        contributions_result = self.db.execute(queries.GET_NET_CONTRIBUTIONS, params).first()
+        net_contribution = Decimal(0)
+        if contributions_result:
+            net_contribution = contributions_result.net_contribution or Decimal(0)
+
+        total_gain_loss = end_mva - start_mva - net_contribution
+
+        # 2. Initialize nodes and links
+        nodes = [
+            schemas.PerformanceNode(label="Start MVA", category="meta"),
+            schemas.PerformanceNode(label="End MVA", category="meta"),
+        ]
+        links = []
+
+        # Link from Start MVA to End MVA
+        links.append(
+            schemas.PerformanceLink(source=0, target=1, value=float(start_mva), attribution_type="opening_balance")
+        )
+
+        # Add Net Contribution node and link
+        if net_contribution != 0:
+            contrib_node_idx = len(nodes)
+            nodes.append(schemas.PerformanceNode(label="Net Contribution", category="contribution"))
+            links.append(
+                schemas.PerformanceLink(
+                    source=contrib_node_idx, target=1, value=float(net_contribution), attribution_type="contribution"
+                )
+            )
+
+        # Add Total Gain/Loss node and link
+        gain_loss_node_idx = len(nodes)
+        nodes.append(schemas.PerformanceNode(label="Total Gain/Loss", category="gain_loss"))
+        links.append(
+            schemas.PerformanceLink(
+                source=gain_loss_node_idx, target=1, value=float(total_gain_loss), attribution_type="total_gain_loss"
+            )
+        )
+
+        # 3. Get security-level attribution for detailed breakdown
+        security_results = self.db.execute(queries.GET_SECURITY_ATTRIBUTION, params).fetchall()
+
+        # 4. Process attribution data to build the rest of the Sankey structure
+        total_fx = sum(r.fx_gain_loss for r in security_results if r.fx_gain_loss is not None)
+        total_income = sum(r.income for r in security_results)
+        total_fees = sum(r.fees for r in security_results)
+
+        # Appreciation is the remainder of the gain/loss
+        total_appreciation = total_gain_loss - Decimal(total_fx) - Decimal(total_income) - Decimal(total_fees)
+
+        # Add attribution nodes and links from Total Gain/Loss
+        if "fx" in attribution_levels and total_fx != 0:
+            fx_node_idx = len(nodes)
+            nodes.append(schemas.PerformanceNode(label="FX Gain/Loss", category="attribution"))
+            links.append(
+                schemas.PerformanceLink(
+                    source=gain_loss_node_idx, target=fx_node_idx, value=float(total_fx), attribution_type="fx_gain"
+                )
+            )
+
+        if "dividends" in attribution_levels and total_income != 0:
+            income_node_idx = len(nodes)
+            nodes.append(schemas.PerformanceNode(label="Income", category="attribution"))
+            links.append(
+                schemas.PerformanceLink(
+                    source=gain_loss_node_idx,
+                    target=income_node_idx,
+                    value=float(total_income),
+                    attribution_type="dividend",
+                )
+            )
+
+        if "fees" in attribution_levels and total_fees != 0:
+            fees_node_idx = len(nodes)
+            nodes.append(schemas.PerformanceNode(label="Fees", category="attribution"))
+            links.append(
+                schemas.PerformanceLink(
+                    source=gain_loss_node_idx, target=fees_node_idx, value=float(total_fees), attribution_type="fee"
+                )
+            )
+
+        if "appreciation" in attribution_levels and total_appreciation != 0:
+            appreciation_node_idx = len(nodes)
+            nodes.append(schemas.PerformanceNode(label="Appreciation", category="attribution"))
+            links.append(
+                schemas.PerformanceLink(
+                    source=gain_loss_node_idx,
+                    target=appreciation_node_idx,
+                    value=float(total_appreciation),
+                    attribution_type="appreciation",
+                )
+            )
+
+        # 5. Optionally, add security-level drill-down if requested
+        if "securities" in attribution_levels:
+            # This would involve creating nodes for each security and linking them
+            # from the appropriate attribution category (e.g., appreciation, income).
+            # This can get complex and might require further aggregation.
+            pass
+
+        return schemas.PerformanceSankeyResponse(nodes=nodes, links=links)

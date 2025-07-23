@@ -57,11 +57,11 @@ def read_holdings_for_sankey(request: schemas.SankeyRequest, db: Session = Depen
     """
     Get holdings data formatted for Sankey diagram visualization.
 
-    The sankey_levels should use prefixes:
-    - 'account.ColumnName' for columns from dim_accounts table
-    - 'security.ColumnName' for columns from dim_securitymaster table
+    The sankey_levels should use prefixes and snake_case format:
+    - 'account.column_name' for columns from dim_accounts table
+    - 'security.column_name' for columns from dim_securitymaster table
 
-    Example sankey_levels: ["account.AccountType", "security.security_currency_code", "security.asset_class_level_1_name"]
+    Example sankey_levels: ["account.account_type", "security.security_currency_code", "security.asset_class_level_1_name"]
     """
     results = services.get_holdings_for_sankey(db, request=request)
     if not results.nodes:
@@ -81,3 +81,28 @@ def get_available_dates(request: schemas.AvailableDatesRequest, db: Session = De
     if not results.available_dates:
         raise HTTPException(status_code=404, detail="No data found for the given account codes")
     return results
+
+
+@app.post("/performance_attribution_sankey/", response_model=schemas.PerformanceSankeyResponse)
+async def get_performance_attribution_sankey(
+    request: schemas.PerformanceAttributionRequest, db: Session = Depends(get_db)
+):
+    """
+    Generate performance attribution data for a Sankey diagram.
+    """
+    service = services.PerformanceSankeyService(db)
+    data = service.generate_sankey_data(
+        start_date=request.start_date,
+        end_date=request.end_date,
+        account_codes=request.account_codes,
+        attribution_levels=request.attribution_levels,
+    )
+    return data
+
+
+@app.get("/available_performance_sankey_levels/", response_model=List[str])
+async def get_available_performance_sankey_levels():
+    """
+    Returns the available levels for performance attribution.
+    """
+    return ["fx", "dividends", "appreciation", "securities", "fees"]
