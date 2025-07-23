@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Holdings Sankey Diagram</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        label {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        input, select {
+            margin-right: 10px;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .level-controls {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .level-control {
+            margin: 5px 0;
+        }
+        #sankeyPlot {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Portfolio Holdings Sankey Diagram</h1>
+        
+        <div style="background-color: #e3f2fd; padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid #2196f3;">
+            <h4 style="margin-top: 0; color: #1976d2;">📊 Flow Types Explained:</h4>
+            <p style="margin-bottom: 10px;"><strong>AccountType Flow:</strong> Shows specific account types like RRSP, TFSA, Non-Registered, RESP, etc. from the <code>AccountType</code> column.</p>
+            <p style="margin-bottom: 0;"><strong>Registered Flow:</strong> Shows broader categorization (Registered vs Non-Registered) from the <code>IsRegisteredAccount</code> column.</p>
+        </div>
+        
+        <div class="controls">
+            <h3>Configuration</h3>
+            
+            <div class="form-group">
+                <label for="apiUrl">API Base URL:</label>
+                <input type="text" id="apiUrl" value="http://localhost:8000" style="width: 300px;">
+            </div>
+            
+            <div class="form-group">
+                <label for="asOfDate">As of Date:</label>
+                <input type="date" id="asOfDate" value="2024-12-31">
+            </div>
+            
+            <div class="form-group">
+                <label for="accountCodes">Account Codes (comma-separated):</label>
+                <input type="text" id="accountCodes" value="5PXABH,5PXAZZ,5PXKAD,5PXKAE,5PXKAF,5PXKAR,5PXKFW,5PXKFX,5PXMCA,5PXMKQ,5PXREY,5PXRYD,5PXRZB,5PXRZC,5PXWAX" style="width: 600px;">
+            </div>
+            
+            <div class="level-controls">
+                <h4>Sankey Levels (drag to reorder)</h4>
+                <p><strong>Flow Options:</strong></p>
+                <div style="margin-bottom: 10px;">
+                    <button type="button" onclick="setAccountTypeFlow()" style="background-color: #28a745;">Account Type Flow (RRSP, TFSA, etc.)</button>
+                    <button type="button" onclick="setRegisteredFlow()" style="background-color: #6c757d;">Registered vs Non-Registered Flow</button>
+                </div>
+                <div id="sankeyLevels">
+                    <div class="level-control" data-level="account.account_type">
+                        <span>📊 account.account_type</span>
+                        <button type="button" onclick="removeLevel(this)">Remove</button>
+                    </div>
+                    <div class="level-control" data-level="security.security_currency_code">
+                        <span>💰 security.security_currency_code</span>
+                        <button type="button" onclick="removeLevel(this)">Remove</button>
+                    </div>
+                    <div class="level-control" data-level="security.asset_class_level_1_name">
+                        <span>🏷️ security.asset_class_level_1_name</span>
+                        <button type="button" onclick="removeLevel(this)">Remove</button>
+                    </div>
+                </div>
+                <button type="button" onclick="loadAvailableColumns()">Load Available Columns</button>
+            </div>
+            
+            <button type="button" onclick="loadSankeyData()">Generate Sankey Diagram</button>
+            <button type="button" onclick="showExampleData()">Show Example Data</button>
+        </div>
+        
+        <div id="status"></div>
+        
+        <div id="sankeyPlot"></div>
+    </div>
+
+    <script>
+        // Example data for demonstration - showing realistic AccountType flow
+        const exampleSankeyData = {
+            nodes: [
+                {label: "Grand Total"},
+                // AccountType level (RRSP, TFSA, etc.)
+                {label: "RRSP"},
+                {label: "TFSA"},
+                {label: "Non-Registered"},
+                {label: "RESP"},
+                // Currency level  
+                {label: "CAD"},
+                {label: "USD"},
+                // Asset Class level
+                {label: "Equity"},
+                {label: "Fixed Income"},
+                {label: "Cash & Equivalents"},
+                {label: "Alternative Investments"}
+            ],
+            links: [
+                // Grand Total to AccountType
+                {source: 0, target: 1, value: 450000}, // Grand Total -> RRSP
+                {source: 0, target: 2, value: 200000}, // Grand Total -> TFSA  
+                {source: 0, target: 3, value: 300000}, // Grand Total -> Non-Registered
+                {source: 0, target: 4, value: 50000},  // Grand Total -> RESP
+                
+                // AccountType to Currency
+                {source: 1, target: 5, value: 350000}, // RRSP -> CAD
+                {source: 1, target: 6, value: 100000}, // RRSP -> USD
+                {source: 2, target: 5, value: 180000}, // TFSA -> CAD
+                {source: 2, target: 6, value: 20000},  // TFSA -> USD
+                {source: 3, target: 5, value: 200000}, // Non-Registered -> CAD
+                {source: 3, target: 6, value: 100000}, // Non-Registered -> USD
+                {source: 4, target: 5, value: 50000},  // RESP -> CAD
+                
+                // Currency to Asset Class
+                {source: 5, target: 7, value: 400000}, // CAD -> Equity
+                {source: 5, target: 8, value: 300000}, // CAD -> Fixed Income
+                {source: 5, target: 9, value: 80000},  // CAD -> Cash & Equivalents
+                {source: 6, target: 7, value: 150000}, // USD -> Equity
+                {source: 6, target: 8, value: 60000},  // USD -> Fixed Income
+                {source: 6, target: 9, value: 10000},  // USD -> Cash & Equivalents
+                {source: 6, target: 10, value: 0}      // USD -> Alternative Investments
+            ]
+        };
+
+        // Alternative example showing Registered vs Non-Registered flow
+        const registeredFlowData = {
+            nodes: [
+                {label: "Grand Total"},
+                // IsRegisteredAccount level
+                {label: "Registered Accounts"},
+                {label: "Non-Registered Accounts"},
+                // Currency level  
+                {label: "CAD"},
+                {label: "USD"},
+                // Asset Class level
+                {label: "Equity"},
+                {label: "Fixed Income"},
+                {label: "Cash & Equivalents"}
+            ],
+            links: [
+                // Grand Total to Registration Status
+                {source: 0, target: 1, value: 700000}, // Grand Total -> Registered
+                {source: 0, target: 2, value: 300000}, // Grand Total -> Non-Registered
+                
+                // Registration Status to Currency
+                {source: 1, target: 3, value: 580000}, // Registered -> CAD
+                {source: 1, target: 4, value: 120000}, // Registered -> USD
+                {source: 2, target: 3, value: 200000}, // Non-Registered -> CAD
+                {source: 2, target: 4, value: 100000}, // Non-Registered -> USD
+                
+                // Currency to Asset Class
+                {source: 3, target: 5, value: 400000}, // CAD -> Equity
+                {source: 3, target: 6, value: 300000}, // CAD -> Fixed Income
+                {source: 3, target: 7, value: 80000},  // CAD -> Cash & Equivalents
+                {source: 4, target: 5, value: 150000}, // USD -> Equity
+                {source: 4, target: 6, value: 60000},  // USD -> Fixed Income
+                {source: 4, target: 7, value: 10000}   // USD -> Cash & Equivalents
+            ]
+        };
+
+        function setAccountTypeFlow() {
+            // Update the sankey levels to show AccountType flow
+            const sankeyLevelsDiv = document.getElementById('sankeyLevels');
+            sankeyLevelsDiv.innerHTML = `
+                <div class="level-control" data-level="account.AccountType">
+                    <span>📊 account.AccountType</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+                <div class="level-control" data-level="security.security_currency_code">
+                    <span>💰 security.security_currency_code</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+                <div class="level-control" data-level="security.asset_class_level_1_name">
+                    <span>🏷️ security.asset_class_level_1_name</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+            `;
+            renderSankeyDiagram(exampleSankeyData);
+            showStatus('Switched to AccountType flow (RRSP, TFSA, etc.)', 'success');
+        }
+
+        function setRegisteredFlow() {
+            // Update the sankey levels to show IsRegisteredAccount flow
+            const sankeyLevelsDiv = document.getElementById('sankeyLevels');
+            sankeyLevelsDiv.innerHTML = `
+                <div class="level-control" data-level="account.IsRegisteredAccount">
+                    <span>🏛️ account.IsRegisteredAccount</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+                <div class="level-control" data-level="security.security_currency_code">
+                    <span>💰 security.security_currency_code</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+                <div class="level-control" data-level="security.asset_class_level_1_name">
+                    <span>🏷️ security.asset_class_level_1_name</span>
+                    <button type="button" onclick="removeLevel(this)">Remove</button>
+                </div>
+            `;
+            renderSankeyDiagram(registeredFlowData);
+            showStatus('Switched to IsRegisteredAccount flow (Registered vs Non-Registered)', 'success');
+        }
+
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function getCurrentLevels() {
+            const levelElements = document.querySelectorAll('#sankeyLevels .level-control');
+            return Array.from(levelElements).map(el => el.dataset.level);
+        }
+
+        function removeLevel(button) {
+            button.parentElement.remove();
+        }
+
+        async function loadAvailableColumns() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            
+            try {
+                showStatus('Loading available columns...', 'success');
+                
+                const response = await fetch(`${apiUrl}/available_sankey_columns/`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Display available columns (you could add them to a dropdown here)
+                let message = 'Available columns loaded. ';
+                message += `Account: ${data.account_columns.length}, `;
+                message += `Security: ${data.security_columns.length}`;
+                
+                showStatus(message, 'success');
+                
+                console.log('Available columns:', data);
+                
+            } catch (error) {
+                showStatus(`Error loading columns: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        async function loadSankeyData() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const asOfDate = document.getElementById('asOfDate').value;
+            const accountCodes = document.getElementById('accountCodes').value.split(',').map(s => s.trim());
+            const sankeyLevels = getCurrentLevels();
+            
+            const requestData = {
+                as_of_date: asOfDate,
+                account_codes: accountCodes,
+                sankey_levels: sankeyLevels
+            };
+            
+            try {
+                showStatus('Loading Sankey data...', 'success');
+                
+                const response = await fetch(`${apiUrl}/holdings_agg_for_sankey/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const sankeyData = await response.json();
+                renderSankeyDiagram(sankeyData);
+                
+                showStatus(`Sankey diagram loaded successfully! Nodes: ${sankeyData.nodes.length}, Links: ${sankeyData.links.length}`, 'success');
+                
+            } catch (error) {
+                showStatus(`Error loading Sankey data: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        function showExampleData() {
+            renderSankeyDiagram(exampleSankeyData);
+            showStatus('Example Sankey diagram loaded - AccountType flow (RRSP, TFSA, etc.)', 'success');
+        }
+
+        function renderSankeyDiagram(sankeyData) {
+            const data = [{
+                type: "sankey",
+                node: {
+                    pad: 15,
+                    thickness: 30,
+                    line: {
+                        color: "black",
+                        width: 0.5
+                    },
+                    label: sankeyData.nodes.map(node => node.label),
+                    color: [
+                        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+                    ]
+                },
+                link: {
+                    source: sankeyData.links.map(link => link.source),
+                    target: sankeyData.links.map(link => link.target),
+                    value: sankeyData.links.map(link => link.value),
+                    color: "rgba(255,255,255,0.4)"
+                }
+            }];
+
+            const layout = {
+                title: {
+                    text: "Portfolio Holdings Flow",
+                    font: { size: 20 }
+                },
+                width: 1200,
+                height: 600,
+                font: { size: 12 },
+                margin: { l: 20, r: 20, t: 50, b: 20 }
+            };
+
+            const config = {
+                displayModeBar: true,
+                displaylogo: false,
+                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d']
+            };
+
+            Plotly.newPlot('sankeyPlot', data, layout, config);
+        }
+
+        // Initialize with example data
+        document.addEventListener('DOMContentLoaded', function() {
+            showExampleData();
+        });
+    </script>
+</body>
+</html>
