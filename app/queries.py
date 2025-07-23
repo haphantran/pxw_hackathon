@@ -138,7 +138,7 @@ def get_sankey_holdings_query(sankey_levels: list[str]):
         f"""
         SELECT
             {select_clause},
-            SUM(h."MarketValue") as total_market_value
+            SUM(h."MarketValueAccrued") as total_market_value
         FROM phw_dev_gold.fact_holdings_all h
         JOIN phw_dev_gold.dim_accounts a ON h."AccountCode" = a."AccountCode"
         JOIN phw_dev_gold.dim_securitymaster s ON h."SecurityCode" = s.security_code
@@ -183,5 +183,19 @@ def get_available_sankey_columns_query():
         AND column_name NOT IN ('secid', 'security_code', 'ProcessedDate')
         
         ORDER BY table_type, column_name
+    """
+    )
+
+
+def get_available_dates_query():
+    """
+    Get available as_of_date values for given account codes from fact_holdings_all table.
+    """
+    return text(
+        """
+        SELECT DISTINCT h."AsofDate" as as_of_date
+        FROM phw_dev_gold.fact_holdings_all h
+        WHERE h."AccountCode" IN :account_codes
+        ORDER BY h."AsofDate" ASC
     """
     )

@@ -166,69 +166,107 @@ def get_holdings_for_sankey(db: Session, request: schemas.SankeyRequest) -> sche
         for i, level in enumerate(request.sankey_levels):
             # Remove prefixes for column access
             clean_level = level.replace("account.", "").replace("security.", "")
-            if clean_level == "asset_class_level_1_name":
-                row_dict[clean_level] = getattr(row, "asset_class_level_1_name")
-            else:
-                row_dict[clean_level] = getattr(row, clean_level)
-        row_dict["value"] = row.total_market_value
+            # Use the snake_case column name that was aliased in the SQL query
+            row_dict[clean_level] = getattr(row, clean_level)
+        # Round market value to 2 decimal places
+        row_dict["value"] = round(float(row.total_market_value), 2)
         data.append(row_dict)
-        total_value += row.total_market_value
+        total_value += row_dict["value"]
 
     # Build Sankey nodes and links
     nodes = [schemas.SankeyNode(label="Grand Total")]  # Root node
-    links = []
     node_map = {"Grand Total": 0}
     node_counter = 1
+    
+    # Collect all unique node labels first
+    all_node_labels = set(["Grand Total"])
+    for item in data:
+        for level in request.sankey_levels:
+            clean_level = level.replace("account.", "").replace("security.", "")
+            all_node_labels.add(str(item[clean_level]))
+    
+    # Create all nodes
+    for label in sorted(all_node_labels):
+        if label not in node_map:
+            nodes.append(schemas.SankeyNode(label=label))
+            node_map[label] = node_counter
+            node_counter += 1
 
+    # Now create links level by level
+    links = []
+    
     # Process each level of the hierarchy
     for level_idx, level in enumerate(request.sankey_levels):
         clean_level = level.replace("account.", "").replace("security.", "")
 
-        # Group data by current level
-        level_groups = {}
-        for item in data:
-            key = item[clean_level]
-            if key not in level_groups:
-                level_groups[key] = 0
-            level_groups[key] += item["value"]
-
-        # Create nodes and links for this level
-        for group_name, group_value in level_groups.items():
-            node_label = f"{group_name}"
-
-            if node_label not in node_map:
-                nodes.append(schemas.SankeyNode(label=node_label))
-                node_map[node_label] = node_counter
-                node_counter += 1
-
-            # Create link from previous level
-            if level_idx == 0:
-                # Link from Grand Total
-                links.append(
-                    schemas.SankeyLink(source=0, target=node_map[node_label], value=group_value)  # Grand Total
-                )
-            else:
-                # Link from previous level groups
-                prev_level = request.sankey_levels[level_idx - 1]
-                prev_clean_level = prev_level.replace("account.", "").replace("security.", "")
-
-                # Group by previous level to create proper links
-                prev_to_curr = {}
-                for item in data:
-                    prev_key = item[prev_clean_level]
-                    curr_key = item[clean_level]
-                    link_key = f"{prev_key} -> {curr_key}"
-
-                    if link_key not in prev_to_curr:
-                        prev_to_curr[link_key] = 0
-                    prev_to_curr[link_key] += item["value"]
-
-                # Create links
-                for link_key, link_value in prev_to_curr.items():
-                    prev_name, curr_name = link_key.split(" -> ")
-                    if prev_name in node_map and curr_name in node_map:
-                        links.append(
-                            schemas.SankeyLink(source=node_map[prev_name], target=node_map[curr_name], value=link_value)
+        if level_idx == 0:
+            # First level: links from Grand Total
+            level_aggregation = {}
+            for item in data:
+                key = str(item[clean_level])
+                if key not in level_aggregation:
+                    level_aggregation[key] = 0
+                level_aggregation[key] += item["value"]
+            
+            # Create links from Grand Total to first level
+            for group_name, group_value in level_aggregation.items():
+                rounded_value = round(float(group_value), 2)
+                if group_name in node_map:
+                    links.append(
+                        schemas.SankeyLink(source=0, target=node_map[group_name], value=rounded_value)
+                    )
+        else:
+            # Subsequent levels: links from previous level
+            prev_level = request.sankey_levels[level_idx - 1]
+            prev_clean_level = prev_level.replace("account.", "").replace("security.", "")
+            
+            # Create a mapping from (prev_level_value, curr_level_value) -> aggregated_value
+            link_aggregation = {}
+            for item in data:
+                prev_key = str(item[prev_clean_level])
+                curr_key = str(item[clean_level])
+                link_key = (prev_key, curr_key)
+                
+                if link_key not in link_aggregation:
+                    link_aggregation[link_key] = 0
+                link_aggregation[link_key] += item["value"]
+            
+            # Create links from previous level to current level
+            for (prev_name, curr_name), link_value in link_aggregation.items():
+                if prev_name in node_map and curr_name in node_map:
+                    rounded_link_value = round(float(link_value), 2)
+                    links.append(
+                        schemas.SankeyLink(
+                            source=node_map[prev_name], 
+                            target=node_map[curr_name], 
+                            value=rounded_link_value
                         )
+                    )
 
     return schemas.SankeyData(nodes=nodes, links=links)
+
+
+def get_available_dates_for_accounts(
+    db: Session, request: schemas.AvailableDatesRequest
+) -> schemas.AvailableDatesResponse:
+    """
+    Get available as_of_date values for given account codes from holdings data.
+    """
+    query = queries.get_available_dates_query()
+    results = db.execute(query, {"account_codes": tuple(request.account_codes)}).fetchall()
+
+    # Extract dates from results
+    available_dates = [row.as_of_date for row in results]
+
+    # Calculate summary statistics
+    date_count = len(available_dates)
+    earliest_date = min(available_dates) if available_dates else None
+    latest_date = max(available_dates) if available_dates else None
+
+    return schemas.AvailableDatesResponse(
+        account_codes=request.account_codes,
+        available_dates=available_dates,
+        date_count=date_count,
+        earliest_date=earliest_date,
+        latest_date=latest_date,
+    )

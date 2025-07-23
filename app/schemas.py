@@ -278,3 +278,25 @@ class AvailableColumn(BaseModel):
 class AvailableSankeyColumns(BaseModel):
     account_columns: List[AvailableColumn]
     security_columns: List[AvailableColumn]
+
+
+class AvailableDatesRequest(BaseModel):
+    account_codes: List[str]
+
+
+class AvailableDatesResponse(BaseModel):
+    account_codes: List[str]
+    available_dates: List[date] = Field(description="List of available dates in ascending order")
+    date_count: int = Field(description="Total number of available dates")
+    earliest_date: Optional[date] = Field(description="Earliest available date")
+    latest_date: Optional[date] = Field(description="Latest available date")
+
+
+class FxRateRequest(BaseModel):
+    as_of_date: str
+
+
+class AvailableSankeyColumnsRequest(BaseModel):
+    """Request schema for getting available Sankey columns - no parameters needed"""
+
+    pass
