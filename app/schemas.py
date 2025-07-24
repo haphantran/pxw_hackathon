@@ -1,6 +1,46 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+
+class BenchmarkPerformanceRequest(BaseModel):
+    account_codes: List[str]
+    benchmark_list: List[str]
+    start_date: str
+    end_date: str
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "account_codes": ["5PXABH"],
+                "benchmark_list": ["VFV.TO", "XEQT.TO"],
+                "start_date": "2022-01-01",
+                "end_date": "2022-12-31",
+            }
+        }
+
+
+class BenchmarkPerformanceResponse(BaseModel):
+    portfolio_values: Dict[str, float]
+    benchmark_performance: Dict[str, Dict[str, float]]
+
+
 from datetime import date, datetime
+
+
+class AccountInfo(BaseModel):
+    account_code: str
+    holding_count: int
+    latest_date: date
+    earliest_date: date
+
+    class Config:
+        orm_mode = True
+
+
+class AccountCodesRequest(BaseModel):
+    """Request to get available account codes - empty request body"""
+
+    pass
 
 
 class DimAccount(BaseModel):
@@ -253,6 +293,19 @@ class SankeyRequest(BaseModel):
         ]
     )
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "as_of_date": "2024-12-31",
+                "account_codes": ["5PXABH", "5PXAZZ"],
+                "sankey_levels": [
+                    "account.account_type",
+                    "security.security_currency_code",
+                    "security.asset_class_level_1_name",
+                ],
+            }
+        }
+
 
 class SankeyNode(BaseModel):
     label: str
@@ -283,6 +336,9 @@ class AvailableSankeyColumns(BaseModel):
 class AvailableDatesRequest(BaseModel):
     account_codes: List[str]
 
+    class Config:
+        schema_extra = {"example": {"account_codes": ["5PXABH", "5PXAZZ"]}}
+
 
 class AvailableDatesResponse(BaseModel):
     account_codes: List[str]
@@ -295,18 +351,41 @@ class AvailableDatesResponse(BaseModel):
 class FxRateRequest(BaseModel):
     as_of_date: str
 
+    class Config:
+        schema_extra = {"example": {"as_of_date": "2024-12-31"}}
+
 
 class AvailableSankeyColumnsRequest(BaseModel):
     """Request schema for getting available Sankey columns - no parameters needed"""
 
     pass
 
+    class Config:
+        schema_extra = {"example": {}}
+
+
+class AvailablePerformanceSankeyLevelsRequest(BaseModel):
+    """Request schema for getting available performance sankey levels - no parameters needed"""
+
+    pass
+
+    class Config:
+        schema_extra = {"example": {}}
+
 
 class PerformanceAttributionRequest(BaseModel):
     start_date: date
     end_date: date
     account_codes: List[str]
-    attribution_levels: List[str]  # e.g., ["fx", "dividends", "appreciation", "securities", "fees"]
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+                "account_codes": ["5PXABH", "5PXAZZ"],
+            }
+        }
 
 
 class PerformanceNode(BaseModel):
@@ -321,6 +400,34 @@ class PerformanceLink(BaseModel):
     attribution_type: str  # "contribution", "fx_gain", "dividend", "appreciation", "fee"
 
 
+class PerformanceSankeyData(BaseModel):
+    nodes: List[PerformanceNode]
+    links: List[PerformanceLink]
+
+
+class PerformanceSummary(BaseModel):
+    start_mva: float
+    end_mva: float
+    net_contribution: float
+    total_gain_loss: float
+    total_gains: float
+    total_losses: float
+    income_total: float
+    fees_total: float
+    fx_total: float
+    appreciation_total: float
+    other_total: float
+    start_date: str
+    end_date: str
+    account_codes: List[str]
+
+
+class PerformanceAttributionResponse(BaseModel):
+    perf_summary: PerformanceSummary
+    perf_sankey: PerformanceSankeyData
+
+
+# Legacy response for backward compatibility
 class PerformanceSankeyResponse(BaseModel):
     nodes: List[PerformanceNode]
     links: List[PerformanceLink]

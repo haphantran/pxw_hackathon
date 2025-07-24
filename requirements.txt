@@ -3,3 +3,6 @@ uvicorn[standard]
 SQLAlchemy
 psycopg2-binary
 python-dotenv
+pydantic
+sqlalchemy
+yfinance

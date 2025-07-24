@@ -205,8 +205,8 @@ def get_available_dates_query():
 GET_MARKET_VALUES = text(
     """
     SELECT
-        (SELECT SUM("MarketValueAccrued") FROM phw_dev_gold.fact_holdings_all WHERE "AsofDate" = :start_date AND "AccountCode" = ANY(:account_codes) AND "CurrencyCode" = 'CAD') as start_mva,
-        (SELECT SUM("MarketValueAccrued") FROM phw_dev_gold.fact_holdings_all WHERE "AsofDate" = :end_date AND "AccountCode" = ANY(:account_codes) AND "CurrencyCode" = 'CAD') as end_mva
+        (SELECT SUM("MarketValueAccrued") FROM phw_dev_gold.fact_holdings_all WHERE "AsofDate" = :start_date AND "AccountCode" IN :account_codes AND "CurrencyCode" = 'CAD') as start_mva,
+        (SELECT SUM("MarketValueAccrued") FROM phw_dev_gold.fact_holdings_all WHERE "AsofDate" = :end_date AND "AccountCode" IN :account_codes AND "CurrencyCode" = 'CAD') as end_mva
 """
 )
 
@@ -215,60 +215,91 @@ GET_NET_CONTRIBUTIONS = text(
     """
     SELECT SUM(net_cashflow_converted) as net_contribution
     FROM phw_dev_gold.fact_daily_aggregate_values
-    WHERE "AsofDate" > :start_date AND "AsofDate" <= :end_date
-    AND account_code = ANY(:account_codes)
+    WHERE as_of_date > :start_date AND as_of_date <= :end_date
+    AND account_code IN :account_codes
 """
 )
 
-# Query for detailed security-level attribution (FX, Appreciation, Income, Fees)
-GET_SECURITY_ATTRIBUTION = text(
+# Simplified queries for performance attribution - calculations done in Python for better debugging
+
+# Get holdings data for start and end dates
+GET_HOLDINGS_FOR_ATTRIBUTION = text(
     """
-WITH holdings_start AS (
-    SELECT "SecurityCode", SUM("MarketValue") as start_value_cad
-    FROM phw_dev_gold.fact_holdings_all
-    WHERE "AsofDate" = :start_date AND "AccountCode" = ANY(:account_codes) AND "CurrencyCode" = 'CAD'
-    GROUP BY "SecurityCode"
-),
-holdings_end AS (
-    SELECT "SecurityCode", SUM("MarketValue") as end_value_cad
-    FROM phw_dev_gold.fact_holdings_all
-    WHERE "AsofDate" = :end_date AND "AccountCode" = ANY(:account_codes) AND "CurrencyCode" = 'CAD'
-    GROUP BY "SecurityCode"
-),
-transactions AS (
-    SELECT
-        "SecurityCode",
-        SUM(CASE WHEN tt."TransactionCategory" = 'Income' THEN "GrossAmount" ELSE 0 END) as income,
-        SUM(CASE WHEN tt."TransactionCategory" = 'Expense' THEN "GrossAmount" ELSE 0 END) as fees,
-        SUM(CASE WHEN tt."TransactionCategory" = 'CashFlow' THEN "GrossAmount" ELSE 0 END) as net_contribution
-    FROM phw_dev_gold.fact_transactions ft
-    JOIN phw_phw_dev_gold_dim_transaction_types tt ON ft."TransactionType" = tt."TransactionType"
-    WHERE "TradeDate" > :start_date AND "TradeDate" <= :end_date AND "AccountCode" = ANY(:account_codes)
-    GROUP BY "SecurityCode"
-),
-fx_rates_start AS (
-    SELECT "LocalCurrencyCode" as currency_code, "Local" as exchange_rate FROM phw_dev_gold.fx_rate WHERE "AsofDate" = :start_date
-),
-fx_rates_end AS (
-    SELECT "LocalCurrencyCode" as currency_code, "Local" as exchange_rate FROM phw_dev_gold.fx_rate WHERE "AsofDate" = :end_date
+    SELECT 
+        h."AsofDate" as as_of_date,
+        h."AccountCode" as account_code,
+        h."SecurityCode" as security_code,
+        h."CurrencyCode" as currency_code,
+        h."MarketValue" as market_value,
+        h."MarketValueAccrued" as market_value_accrued,
+        h."Quantity" as quantity,
+        h."MarketPrice" as market_price,
+        h."SecurityFXRate" as security_fx_rate,
+        sm.security_symbol,
+        sm.security_currency_code,
+        sm.security_name
+    FROM phw_dev_gold.fact_holdings_all h
+    LEFT JOIN phw_dev_gold.dim_securitymaster sm ON h."SecurityCode" = sm.security_code
+    WHERE h."AsofDate" IN (:start_date, :end_date)
+    AND h."AccountCode" IN :account_codes
+    AND h."CurrencyCode" = 'CAD'
+    ORDER BY h."AsofDate", h."SecurityCode"
+    """
 )
-SELECT
-    sm.security_symbol,
-    sm.security_currency_code,
-    COALESCE(hs.start_value_cad, 0) as start_value_cad,
-    COALESCE(he.end_value_cad, 0) as end_value_cad,
-    COALESCE(t.income, 0) as income,
-    COALESCE(t.fees, 0) as fees,
-    COALESCE(t.net_contribution, 0) as security_net_contribution,
-    (COALESCE(he.end_value_cad, 0) - COALESCE(hs.start_value_cad, 0) - COALESCE(t.net_contribution, 0)) as total_gain_loss,
-    -- FX Gain/Loss Calculation
-    ( (COALESCE(he.end_value_cad, 0) / fre.exchange_rate) - (COALESCE(hs.start_value_cad, 0) / frs.exchange_rate) ) * (fre.exchange_rate - frs.exchange_rate) as fx_gain_loss
-FROM phw_dev_gold.dim_securitymaster sm
-LEFT JOIN holdings_start hs ON sm.security_code = hs."SecurityCode"
-LEFT JOIN holdings_end he ON sm.security_code = he."SecurityCode"
-LEFT JOIN transactions t ON sm.security_code = t."SecurityCode"
-LEFT JOIN fx_rates_start frs ON sm.security_currency_code = frs.currency_code
-LEFT JOIN fx_rates_end fre ON sm.security_currency_code = fre.currency_code
-WHERE COALESCE(hs.start_value_cad, 0) != 0 OR COALESCE(he.end_value_cad, 0) != 0 OR COALESCE(t.income, 0) != 0
-"""
+
+# Get all transactions for the period
+GET_TRANSACTIONS_FOR_ATTRIBUTION = text(
+    """
+    SELECT 
+        ft."AccountCode" as account_code,
+        ft."SecurityCode" as security_code,
+        ft."TransactionTypeCode" as transaction_type_code,
+        ft."TradeDate" as trade_date,
+        ft."SettleDate" as settle_date,
+        ft."Quantity" as quantity,
+        ft."UnitPrice" as unit_price,
+        ft."BookValue" as book_value,
+        ft."SettlementAmount" as settlement_amount,
+        ft."SettlementCurrency" as settlement_currency,
+        sm.security_symbol,
+        sm.security_currency_code,
+        sm.security_name
+    FROM phw_dev_gold.fact_transactions ft
+    LEFT JOIN phw_dev_gold.dim_securitymaster sm ON ft."SecurityCode" = sm.security_code
+    WHERE ft."TradeDate" > :start_date 
+    AND ft."TradeDate" <= :end_date 
+    AND ft."AccountCode" IN :account_codes
+    ORDER BY ft."TradeDate", ft."SecurityCode"
+    """
+)
+
+# Get FX rates for the period (for transaction conversion and FX gain calculation)
+GET_FX_RATES_FOR_ATTRIBUTION = text(
+    """
+    SELECT 
+        fx."AsofDate" as as_of_date,
+        fx."LocalCurrencyCode" as currency_code,
+        fx."Local" as exchange_rate,
+        fx."BaseCAD" as base_cad_rate
+    FROM phw_dev_gold.fx_rate fx
+    WHERE fx."AsofDate" >= :start_date 
+    AND fx."AsofDate" <= :end_date
+    ORDER BY fx."AsofDate", fx."LocalCurrencyCode"
+    """
+)
+
+# Get daily aggregate values for net contributions
+GET_DAILY_AGGREGATE_FOR_ATTRIBUTION = text(
+    """
+    SELECT 
+        account_code,
+        as_of_date,
+        net_cashflow_converted as net_cashflow,
+        market_value_accrued_converted as market_value_accrued
+    FROM phw_dev_gold.fact_daily_aggregate_values
+    WHERE as_of_date > :start_date 
+    AND as_of_date <= :end_date
+    AND account_code IN :account_codes
+    ORDER BY as_of_date, account_code
+    """
 )

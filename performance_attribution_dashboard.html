@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Attribution Sankey Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        label {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        input, select {
+            margin-right: 10px;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.success {
+            background-color: #28a745;
+        }
+        button.success:hover {
+            background-color: #218838;
+        }
+        #sankeyPlot {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info-box {
+            background-color: #e3f2fd;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            border-left: 4px solid #2196f3;
+        }
+        .debug-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .attribution-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .attribution-card {
+            background-color: #ffffff;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .attribution-card h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+        .attribution-value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .positive { color: #28a745; }
+        .negative { color: #dc3545; }
+        .neutral { color: #6c757d; }
+        .sql-query {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-left: 3px solid #007bff;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏦 Performance Attribution Sankey Dashboard</h1>
+        
+        <div class="info-box">
+            <h4 style="margin-top: 0; color: #1976d2;">📊 Focused Performance Attribution Flow:</h4>
+            <p style="margin-bottom: 10px;"><strong>Level 1:</strong> Total Gain/Loss (excludes Start/End MVA for better visualization)</p>
+            <p style="margin-bottom: 10px;"><strong>Level 2:</strong> Total Gain/Loss breaks down into:</p>
+            <ul style="margin-bottom: 10px; padding-left: 20px;">
+                <li><strong>Total Gains:</strong> All positive performance impacts</li>
+                <li><strong>Total Losses:</strong> All negative performance impacts</li>
+            </ul>
+            <p style="margin-bottom: 10px;"><strong>Level 3:</strong> Detailed attribution categories:</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 10px;">
+                <div>
+                    <strong>📈 GAINS:</strong>
+                    <ul style="margin: 5px 0; padding-left: 20px;">
+                        <li>Market Appreciation</li>
+                        <li>FX Gains</li>
+                        <li>Income/Dividends</li>
+                        <li>Other Gains</li>
+                    </ul>
+                </div>
+                <div>
+                    <strong>📉 LOSSES:</strong>
+                    <ul style="margin: 5px 0; padding-left: 20px;">
+                        <li>Market Depreciation</li>
+                        <li>FX Losses</li>
+                        <li>Fees/Expenses</li>
+                        <li>Other Losses</li>
+                    </ul>
+                </div>
+            </div>
+            <p style="margin-bottom: 0;"><strong>Level 4:</strong> Account-level breakdown showing which accounts contribute to each attribution category</p>
+        </div>
+        
+        <div class="controls">
+            <h3>Configuration</h3>
+            
+            <div class="form-group">
+                <label for="apiUrl">API Base URL:</label>
+                <input type="text" id="apiUrl" value="http://localhost:8000" style="width: 300px;">
+            </div>
+            
+            <div class="form-group">
+                <label for="startDate">Start Date:</label>
+                <input type="date" id="startDate" value="2024-01-01">
+                
+                <label for="endDate">End Date:</label>
+                <input type="date" id="endDate" value="2024-12-31">
+            </div>
+            
+            <div class="form-group">
+                <label for="accountCodes">Account Codes (comma-separated):</label>
+                <input type="text" id="accountCodes" value="5PXABH,5PXAZZ,5PXKAD" style="width: 400px;">
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <button type="button" onclick="loadPerformanceAttribution()" class="success">
+                    📊 Generate Performance Attribution
+                </button>
+                <button type="button" onclick="showExampleData()">
+                    🎯 Show Example Data
+                </button>
+                <button type="button" onclick="showTestQueries()">
+                    🔍 Show Test Queries
+                </button>
+                <button type="button" onclick="loadAvailableLevels()">
+                    📋 Load Available Levels
+                </button>
+            </div>
+        </div>
+        
+        <div id="status"></div>
+        
+        <div id="attributionSummary"></div>
+        
+        <div id="sankeyPlot"></div>
+        
+        <div id="debugInfo"></div>
+    </div>
+
+    <script>
+        // Example performance attribution data for demonstration (focused on gain/loss only)
+        const exampleAttributionData = {
+            nodes: [
+                // Level 1: Root - Total Gain/Loss
+                {label: "Total Gain/Loss ($2,500)", category: "gain_loss"},
+                
+                // Level 2: Gains vs Losses
+                {label: "Total Gains (+$3,200)", category: "gains"},
+                {label: "Total Losses (-$700)", category: "losses"},
+                
+                // Level 3: Attribution Details - Gains
+                {label: "Market Appreciation (+$1,800)", category: "attribution_gain"},
+                {label: "FX Gain (+$300)", category: "attribution_gain"},
+                {label: "Income/Dividends (+$1,100)", category: "attribution_gain"},
+                
+                // Level 3: Attribution Details - Losses
+                {label: "Fees/Expenses (-$450)", category: "attribution_loss"},
+                {label: "FX Loss (-$250)", category: "attribution_loss"},
+                
+                // Level 4: Account Breakdown
+                {label: "5PXABH ($1,800)", category: "account"},
+                {label: "5PXAZZ ($500)", category: "account"},
+                {label: "5PXKAD ($200)", category: "account"}
+            ],
+            links: [
+                // Total Gain/Loss breakdown (Level 2)
+                {source: 0, target: 1, value: 3200, attribution_type: "gains"},
+                {source: 0, target: 2, value: 700, attribution_type: "losses"},
+                
+                // Gains breakdown (Level 3)
+                {source: 1, target: 3, value: 1800, attribution_type: "appreciation_gain"},
+                {source: 1, target: 4, value: 300, attribution_type: "fx_gain"},
+                {source: 1, target: 5, value: 1100, attribution_type: "dividend_gain"},
+                
+                // Losses breakdown (Level 3)
+                {source: 2, target: 6, value: 450, attribution_type: "fee_loss"},
+                {source: 2, target: 7, value: 250, attribution_type: "fx_loss"},
+                
+                // Account breakdown (Level 4) - showing which accounts contribute to each attribution
+                {source: 3, target: 8, value: 1200, attribution_type: "account_appreciation"}, // 5PXABH gets most appreciation
+                {source: 3, target: 9, value: 400, attribution_type: "account_appreciation"},  // 5PXAZZ gets some appreciation
+                {source: 3, target: 10, value: 200, attribution_type: "account_appreciation"}, // 5PXKAD gets some appreciation
+                
+                {source: 5, target: 8, value: 600, attribution_type: "account_income"},        // 5PXABH gets most income
+                {source: 5, target: 9, value: 350, attribution_type: "account_income"},        // 5PXAZZ gets some income
+                {source: 5, target: 10, value: 150, attribution_type: "account_income"},       // 5PXKAD gets some income
+                
+                {source: 6, target: 8, value: 300, attribution_type: "account_fees"},          // 5PXABH pays most fees
+                {source: 6, target: 9, value: 100, attribution_type: "account_fees"},          // 5PXAZZ pays some fees
+                {source: 6, target: 10, value: 50, attribution_type: "account_fees"}           // 5PXKAD pays some fees
+            ]
+        };
+
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function showDebugInfo(data) {
+            const debugDiv = document.getElementById('debugInfo');
+            debugDiv.innerHTML = `
+                <h4>🔍 Debug Information</h4>
+                <pre>${JSON.stringify(data, null, 2)}</pre>
+            `;
+        }
+
+        function showPerformanceSummary(summary) {
+            const formatCurrency = (value) => {
+                if (value === null || value === undefined) return 'N/A';
+                return new Intl.NumberFormat('en-CA', {
+                    style: 'currency',
+                    currency: 'CAD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(value);
+            };
+
+            const getValueClass = (value) => {
+                if (value > 0) return 'positive';
+                if (value < 0) return 'negative';
+                return 'neutral';
+            };
+
+            const summaryDiv = document.getElementById('attributionSummary');
+            summaryDiv.innerHTML = `
+                <h3>📊 Performance Attribution Summary</h3>
+                <div style="background-color: #e8f4fd; padding: 15px; margin-bottom: 15px; border-radius: 6px; border-left: 4px solid #007bff;">
+                    <h5 style="margin: 0 0 10px 0; color: #004085;">📈 Portfolio Overview (${summary.start_date} to ${summary.end_date})</h5>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div><strong>Start MVA:</strong> <span class="neutral">${formatCurrency(summary.start_mva)}</span></div>
+                        <div><strong>End MVA:</strong> <span class="neutral">${formatCurrency(summary.end_mva)}</span></div>
+                        <div><strong>Net Contribution:</strong> <span class="${getValueClass(summary.net_contribution)}">${formatCurrency(summary.net_contribution)}</span></div>
+                        <div><strong>Total Gain/Loss:</strong> <span class="${getValueClass(summary.total_gain_loss)}">${formatCurrency(summary.total_gain_loss)}</span></div>
+                        <div><strong>Accounts:</strong> ${summary.account_codes.join(', ')}</div>
+                        <div><strong>Return %:</strong> <span class="${getValueClass(summary.total_gain_loss)}">${((summary.total_gain_loss / summary.start_mva) * 100).toFixed(2)}%</span></div>
+                    </div>
+                </div>
+                <div class="attribution-summary">
+                    <div class="attribution-card">
+                        <h4>Total Gain/Loss</h4>
+                        <div class="attribution-value ${getValueClass(summary.total_gain_loss)}">${formatCurrency(summary.total_gain_loss)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Total Gains</h4>
+                        <div class="attribution-value ${getValueClass(summary.total_gains)}">${formatCurrency(summary.total_gains)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Total Losses</h4>
+                        <div class="attribution-value ${getValueClass(-summary.total_losses)}">${formatCurrency(-summary.total_losses)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>FX Net Gain/Loss</h4>
+                        <div class="attribution-value ${getValueClass(summary.fx_total)}">${formatCurrency(summary.fx_total)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Income/Dividends</h4>
+                        <div class="attribution-value ${getValueClass(summary.income_total)}">${formatCurrency(summary.income_total)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Market Appreciation</h4>
+                        <div class="attribution-value ${getValueClass(summary.appreciation_total)}">${formatCurrency(summary.appreciation_total)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Fees</h4>
+                        <div class="attribution-value ${getValueClass(summary.fees_total)}">${formatCurrency(summary.fees_total)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Other</h4>
+                        <div class="attribution-value ${getValueClass(summary.other_total)}">${formatCurrency(summary.other_total)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showAttributionSummary(data) {
+            // Extract attribution values from the data
+            const summary = {
+                startMVA: null,
+                endMVA: null,
+                netContribution: null,
+                totalGainLoss: null,
+                totalGains: null,
+                totalLosses: null,
+                fxGain: null,
+                fxLoss: null,
+                income: null,
+                appreciation: null,
+                fees: null,
+                other: null
+            };
+
+            // Parse links to extract values
+            data.links.forEach(link => {
+                const value = link.value;
+                const sourceLabel = data.nodes[link.source].label;
+                const targetLabel = data.nodes[link.target].label;
+                
+                switch(link.attribution_type) {
+                    case 'opening_balance':
+                        summary.startMVA = value;
+                        break;
+                    case 'contribution':
+                        summary.netContribution = value;
+                        break;
+                    case 'total_gain_loss':
+                        summary.totalGainLoss = value;
+                        break;
+                    case 'gains':
+                        summary.totalGains = value;
+                        break;
+                    case 'losses':
+                        summary.totalLosses = -value; // Show as negative
+                        break;
+                    case 'fx_gain':
+                        summary.fxGain = value;
+                        break;
+                    case 'fx_loss':
+                        summary.fxLoss = -value; // Show as negative
+                        break;
+                    case 'dividend_gain':
+                        summary.income = value;
+                        break;
+                    case 'appreciation_gain':
+                        summary.appreciation = value;
+                        break;
+                    case 'appreciation_loss':
+                        if (!summary.appreciation) summary.appreciation = 0;
+                        summary.appreciation -= value; // Subtract loss
+                        break;
+                    case 'fee_loss':
+                        summary.fees = -value; // Show as negative
+                        break;
+                    case 'other_gain':
+                        summary.other = value;
+                        break;
+                    case 'other_loss':
+                        if (!summary.other) summary.other = 0;
+                        summary.other -= value; // Subtract loss
+                        break;
+                }
+            });
+
+            // Calculate end MVA if not directly available
+            if (!summary.endMVA) {
+                summary.endMVA = summary.startMVA + summary.netContribution + summary.totalGainLoss;
+            }
+
+            const formatCurrency = (value) => {
+                if (value === null || value === undefined) return 'N/A';
+                return new Intl.NumberFormat('en-CA', {
+                    style: 'currency',
+                    currency: 'CAD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(value);
+            };
+
+            const getValueClass = (value) => {
+                if (value > 0) return 'positive';
+                if (value < 0) return 'negative';
+                return 'neutral';
+            };
+
+            const summaryDiv = document.getElementById('attributionSummary');
+            summaryDiv.innerHTML = `
+                <h3>📊 Performance Attribution Summary</h3>
+                <div style="background-color: #e8f4fd; padding: 15px; margin-bottom: 15px; border-radius: 6px; border-left: 4px solid #007bff;">
+                    <h5 style="margin: 0 0 10px 0; color: #004085;">💡 Note: MVA values are excluded from the Sankey diagram for better visualization of gain/loss flows</h5>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                        <div><strong>Start MVA:</strong> ${formatCurrency(summary.startMVA)}</div>
+                        <div><strong>End MVA:</strong> ${formatCurrency(summary.endMVA)}</div>
+                        <div><strong>Net Contribution:</strong> ${formatCurrency(summary.netContribution)}</div>
+                        <div><strong>Total Gain/Loss:</strong> ${formatCurrency(summary.totalGainLoss)}</div>
+                    </div>
+                </div>
+                <div class="attribution-summary">
+                    <div class="attribution-card">
+                        <h4>Total Gain/Loss</h4>
+                        <div class="attribution-value ${getValueClass(summary.totalGainLoss)}">${formatCurrency(summary.totalGainLoss)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Total Gains</h4>
+                        <div class="attribution-value ${getValueClass(summary.totalGains)}">${formatCurrency(summary.totalGains)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Total Losses</h4>
+                        <div class="attribution-value ${getValueClass(summary.totalLosses)}">${formatCurrency(summary.totalLosses)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>FX Net Gain/Loss</h4>
+                        <div class="attribution-value ${getValueClass((summary.fxGain || 0) + (summary.fxLoss || 0))}">${formatCurrency((summary.fxGain || 0) + (summary.fxLoss || 0))}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Income/Dividends</h4>
+                        <div class="attribution-value ${getValueClass(summary.income)}">${formatCurrency(summary.income)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Market Appreciation</h4>
+                        <div class="attribution-value ${getValueClass(summary.appreciation)}">${formatCurrency(summary.appreciation)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Fees</h4>
+                        <div class="attribution-value ${getValueClass(summary.fees)}">${formatCurrency(summary.fees)}</div>
+                    </div>
+                    <div class="attribution-card">
+                        <h4>Other</h4>
+                        <div class="attribution-value ${getValueClass(summary.other)}">${formatCurrency(summary.other)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadPerformanceAttribution() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const accountCodes = document.getElementById('accountCodes').value.split(',').map(s => s.trim());
+            
+            const requestData = {
+                start_date: startDate,
+                end_date: endDate,
+                account_codes: accountCodes
+            };
+            
+            try {
+                showStatus('Loading performance attribution data...', 'success');
+                
+                const response = await fetch(`${apiUrl}/performance_attribution_sankey/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const fullResponse = await response.json();
+                
+                // Extract the separate components
+                const performanceSummary = fullResponse.perf_summary;
+                const sankeyData = fullResponse.perf_sankey;
+                
+                // Display the performance summary
+                showPerformanceSummary(performanceSummary);
+                
+                // Render the Sankey diagram
+                renderSankeyDiagram(sankeyData);
+                
+                // Show debug info
+                showDebugInfo({
+                    summary: performanceSummary,
+                    sankey: sankeyData
+                });
+                
+                showStatus(`Performance attribution loaded! Summary: ${performanceSummary.account_codes.length} accounts, Sankey: ${sankeyData.nodes.length} nodes, ${sankeyData.links.length} links`, 'success');
+                
+            } catch (error) {
+                showStatus(`Error loading performance attribution: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        async function loadAvailableLevels() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            
+            try {
+                showStatus('Loading available attribution levels...', 'success');
+                
+                const response = await fetch(`${apiUrl}/available_performance_sankey_levels/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({})
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const levels = await response.json();
+                
+                showStatus(`Available attribution levels: ${levels.join(', ')}`, 'success');
+                
+                // Show in debug info
+                const debugDiv = document.getElementById('debugInfo');
+                debugDiv.innerHTML = `
+                    <h4>📋 Available Attribution Levels</h4>
+                    <ul>
+                        ${levels.map(level => `<li><strong>${level}</strong></li>`).join('')}
+                    </ul>
+                    <p><em>Note: Attribution levels are now fixed and cannot be customized to ensure consistent calculations.</em></p>
+                `;
+                
+            } catch (error) {
+                showStatus(`Error loading available levels: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        function showTestQueries() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const accountCodes = document.getElementById('accountCodes').value.split(',').map(s => s.trim().replace(/['"]/g, ''));
+            
+            const accountCodesSQL = accountCodes.map(code => `'${code}'`).join(', ');
+            
+            const queries = {
+                marketValues: `-- Check Market Values at Start and End Dates
+SELECT 
+    "AsofDate",
+    SUM("MarketValueAccrued") AS market_value_accrued
+FROM phw_dev_gold.fact_holdings_all
+WHERE "AsofDate" IN ('${startDate}', '${endDate}')
+AND "AccountCode" IN (${accountCodesSQL})
+AND "CurrencyCode" = 'CAD'
+GROUP BY "AsofDate"
+ORDER BY "AsofDate";`,
+
+                netContributions: `-- Check Net Contributions During Period
+SELECT 
+    SUM(net_cashflow_converted) as net_contribution
+FROM phw_dev_gold.fact_daily_aggregate_values
+WHERE as_of_date > '${startDate}' 
+AND as_of_date <= '${endDate}'
+AND account_code IN (${accountCodesSQL});`,
+
+                transactions: `-- Sample Transactions for Attribution Analysis
+SELECT 
+    ft."TradeDate",
+    ft."AccountCode",
+    ft."SecurityCode",
+    ft."TransactionTypeCode",
+    ft."SettlementAmount",
+    ft."SettlementCurrency",
+    sm.security_symbol,
+    sm.security_currency_code,
+    CASE 
+        WHEN ft."TransactionTypeCode" IN ('CDV', 'DVI', 'INT', 'FNI', 'IPS', 'DRI', 'GRI', 'FRI', 'IRI', 'CGR', 'DVR', 'FIR', 'FID', 'IIR', 'IID', 'INR', 'IND') 
+        THEN 'Income'
+        WHEN ft."TransactionTypeCode" IN ('MFE', 'FEE', 'ADM', 'EXP') 
+        THEN 'Fee'
+        WHEN ft."TransactionTypeCode" IN ('JBY', 'JSL', 'TCI', 'TCO', 'TSI', 'TSO') 
+        THEN 'Cash Flow'
+        ELSE 'Other'
+    END as transaction_category
+FROM phw_dev_gold.fact_transactions ft
+LEFT JOIN phw_dev_gold.dim_securitymaster sm ON ft."SecurityCode" = sm.security_code
+WHERE ft."TradeDate" > '${startDate}' 
+AND ft."TradeDate" <= '${endDate}'
+AND ft."AccountCode" IN (${accountCodesSQL})
+ORDER BY ft."TradeDate", ft."TransactionTypeCode"
+LIMIT 20;`,
+
+                fxRates: `-- FX Rates for Period (for currency conversion)
+SELECT 
+    fx."AsofDate",
+    fx."LocalCurrencyCode",
+    fx."Local" as exchange_rate
+FROM phw_dev_gold.fx_rate fx
+WHERE fx."AsofDate" IN ('${startDate}', '${endDate}')
+AND fx."LocalCurrencyCode" IN ('USD', 'EUR', 'GBP')
+ORDER BY fx."AsofDate", fx."LocalCurrencyCode";`
+            };
+
+            const debugDiv = document.getElementById('debugInfo');
+            debugDiv.innerHTML = `
+                <h4>🔍 Test Queries for Performance Attribution</h4>
+                <h5>1. Market Values Check:</h5>
+                <div class="sql-query">${queries.marketValues}</div>
+                
+                <h5>2. Net Contributions Check:</h5>
+                <div class="sql-query">${queries.netContributions}</div>
+                
+                <h5>3. Sample Transactions:</h5>
+                <div class="sql-query">${queries.transactions}</div>
+                
+                <h5>4. FX Rates Check:</h5>
+                <div class="sql-query">${queries.fxRates}</div>
+                
+                <h5>📝 Testing Notes:</h5>
+                <ul>
+                    <li><strong>Market Values:</strong> Should show values for both start and end dates</li>
+                    <li><strong>Net Contributions:</strong> Should match the Net Contribution in the Sankey</li>
+                    <li><strong>Transactions:</strong> Check categorization of income, fees, and cash flows</li>
+                    <li><strong>FX Rates:</strong> Ensure rates exist for foreign currency securities</li>
+                </ul>
+            `;
+            
+            showStatus('Test queries displayed in debug section', 'success');
+        }
+
+        function showExampleData() {
+            // Example performance summary
+            const exampleSummary = {
+                start_mva: 125000,
+                end_mva: 132500,
+                net_contribution: 5000,
+                total_gain_loss: 2500,
+                total_gains: 3200,
+                total_losses: 700,
+                income_total: 1100,
+                fees_total: -450,
+                fx_total: 50,  // Net FX (300 gain - 250 loss)
+                appreciation_total: 1800,
+                other_total: 0,
+                start_date: "2024-01-01",
+                end_date: "2024-12-31",
+                account_codes: ["5PXABH", "5PXAZZ", "5PXKAD"]
+            };
+
+            showPerformanceSummary(exampleSummary);
+            renderSankeyDiagram(exampleAttributionData);
+            showDebugInfo({
+                summary: exampleSummary,
+                sankey: exampleAttributionData
+            });
+            showStatus('Example performance attribution data loaded', 'success');
+        }
+
+        function renderSankeyDiagram(attributionData) {
+            // DEBUG: Print the attribution data to console
+            console.log('🔍 SANKEY DEBUG - Raw Attribution Data:', attributionData);
+            
+            // Format currency values
+            const formatCurrency = (value) => {
+                return new Intl.NumberFormat('en-CA', {
+                    style: 'currency',
+                    currency: 'CAD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(value);
+            };
+
+            // Color coding based on node category
+            const getNodeColor = (node) => {
+                switch(node.category) {
+                    case 'meta': return '#6c757d';                    // Gray for start/end MVA
+                    case 'contribution': return '#17a2b8';            // Blue for contributions
+                    case 'gain_loss': return '#ffc107';               // Yellow for total gain/loss
+                    case 'gains': return '#28a745';                   // Green for total gains
+                    case 'losses': return '#dc3545';                  // Red for total losses
+                    case 'attribution_gain': return '#20c997';        // Teal for specific gains
+                    case 'attribution_loss': return '#fd7e14';        // Orange for specific losses
+                    case 'account': 
+                        // Different colors for each account
+                        if (node.label.includes('5PXABH')) return '#6f42c1';      // Purple for 5PXABH
+                        if (node.label.includes('5PXAZZ')) return '#e83e8c';      // Pink for 5PXAZZ
+                        if (node.label.includes('5PXKAD')) return '#6610f2';      // Indigo for 5PXKAD
+                        return '#6f42c1';  // Default purple for other accounts
+                    case 'attribution': 
+                        if (node.label.includes('Fee')) return '#dc3545';      // Red for fees
+                        if (node.label.includes('FX')) return '#fd7e14';       // Orange for FX
+                        if (node.label.includes('Income')) return '#28a745';   // Green for income
+                        if (node.label.includes('Appreciation')) return '#20c997'; // Teal for appreciation
+                        return '#6f42c1';  // Purple for other
+                    default: return '#007bff';
+                }
+            };
+
+            // Color coding for links based on attribution type
+            const getLinkColor = (link) => {
+                const alpha = 0.3;
+                switch(link.attribution_type) {
+                    case 'opening_balance': return `rgba(108, 117, 125, ${alpha})`;     // Gray
+                    case 'contribution': return `rgba(23, 162, 184, ${alpha})`;         // Blue
+                    case 'total_gain_loss': return `rgba(255, 193, 7, ${alpha})`;       // Yellow
+                    case 'gains': return `rgba(40, 167, 69, ${alpha})`;                 // Green
+                    case 'losses': return `rgba(220, 53, 69, ${alpha})`;                // Red
+                    case 'fx_gain': return `rgba(32, 201, 151, ${alpha})`;              // Teal
+                    case 'fx_loss': return `rgba(253, 126, 20, ${alpha})`;              // Orange
+                    case 'dividend_gain': return `rgba(40, 167, 69, ${alpha})`;         // Green
+                    case 'dividend_loss': return `rgba(253, 126, 20, ${alpha})`;        // Orange
+                    case 'appreciation_gain': return `rgba(32, 201, 151, ${alpha})`;    // Teal
+                    case 'appreciation_loss': return `rgba(253, 126, 20, ${alpha})`;    // Orange
+                    case 'fee_gain': return `rgba(32, 201, 151, ${alpha})`;             // Teal
+                    case 'fee_loss': return `rgba(253, 126, 20, ${alpha})`;             // Orange
+                    case 'other_gain': return `rgba(32, 201, 151, ${alpha})`;           // Teal
+                    case 'other_loss': return `rgba(253, 126, 20, ${alpha})`;           // Orange
+                    case 'account_appreciation': return `rgba(111, 66, 193, ${alpha})`;   // Purple for account links
+                    case 'account_income': return `rgba(111, 66, 193, ${alpha})`;         // Purple for account links
+                    case 'account_fees': return `rgba(111, 66, 193, ${alpha})`;           // Purple for account links
+                    case 'account_fx': return `rgba(111, 66, 193, ${alpha})`;             // Purple for account links
+                    default: return `rgba(0, 123, 255, ${alpha})`;                      // Default blue
+                }
+            };
+
+            const data = [{
+                type: "sankey",
+                node: {
+                    pad: 15,
+                    thickness: 30,
+                    line: {
+                        color: "black",
+                        width: 0.5
+                    },
+                    label: attributionData.nodes.map(node => node.label),
+                    color: attributionData.nodes.map(node => getNodeColor(node)),
+                    hovertemplate: '<b>%{label}</b><br>' +
+                                   'Category: %{customdata}<br>' +
+                                   '<extra></extra>',
+                    customdata: attributionData.nodes.map(node => node.category)
+                },
+                link: {
+                    source: attributionData.links.map(link => link.source),
+                    target: attributionData.links.map(link => link.target),
+                    value: attributionData.links.map(link => link.value), // Use actual values from API
+                    color: attributionData.links.map(link => getLinkColor(link)),
+                    customdata: attributionData.links.map(link => ({
+                        value: link.value,
+                        formatted_value: formatCurrency(link.value),
+                        attribution_type: link.attribution_type
+                    })),
+                    hovertemplate: '<b>%{source.label} → %{target.label}</b><br>' +
+                                   'Amount: %{customdata.formatted_value}<br>' +
+                                   'Type: %{customdata.attribution_type}<br>' +
+                                   '<extra></extra>'
+                }
+            }];
+
+            // DEBUG: Print what values are being sent to Plotly
+            console.log('🔍 SANKEY DEBUG - Plotly Data:');
+            console.log('Nodes:', data[0].node.label);
+            console.log('Link Sources:', data[0].link.source);
+            console.log('Link Targets:', data[0].link.target);
+            console.log('Link Values:', data[0].link.value);
+            console.log('Link Attribution Types:', attributionData.links.map(link => link.attribution_type));
+            
+            // DEBUG: Print specific flows we care about
+            attributionData.links.forEach((link, index) => {
+                const sourceLabel = attributionData.nodes[link.source]?.label || 'Unknown';
+                const targetLabel = attributionData.nodes[link.target]?.label || 'Unknown';
+                console.log(`🔗 Link ${index}: ${sourceLabel} → ${targetLabel} = ${link.value} (${link.attribution_type})`);
+            });
+
+            const layout = {
+                title: {
+                    text: 'Performance Attribution Flow (Focused on Gain/Loss)',
+                    font: { size: 18 }
+                },
+                width: 1200,
+                height: 600,
+                font: { size: 12 },
+                margin: { l: 50, r: 50, t: 50, b: 20 }
+            };
+
+            const config = {
+                displayModeBar: true,
+                displaylogo: false,
+                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d']
+            };
+
+            Plotly.newPlot('sankeyPlot', data, layout, config);
+        }
+
+        // Initialize with example data
+        document.addEventListener('DOMContentLoaded', function() {
+            showExampleData();
+        });
+    </script>
+</body>
+</html>
