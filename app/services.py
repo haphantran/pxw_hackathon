@@ -388,12 +388,15 @@ ORDER BY "AsofDate", "AccountCode";""")
 
         for holding in holdings_data:
             security_code = holding.security_code
+            account_code = holding.account_code
+            # Use compound key to avoid overwriting holdings for same security in different accounts
+            key = (security_code, account_code)
             date_str = holding.as_of_date.strftime("%Y-%m-%d")
 
             if date_str == start_date.strftime("%Y-%m-%d"):
-                start_holdings[security_code] = holding
+                start_holdings[key] = holding
             elif date_str == end_date.strftime("%Y-%m-%d"):
-                end_holdings[security_code] = holding
+                end_holdings[key] = holding
 
         print(f"📊 Start date holdings: {len(start_holdings)} securities")
         print(f"📊 End date holdings: {len(end_holdings)} securities")
@@ -404,13 +407,13 @@ ORDER BY "AsofDate", "AccountCode";""")
         account_start_mva = {}
         account_end_mva = {}
         
-        for security_code, holding in start_holdings.items():
+        for key, holding in start_holdings.items():
             account = holding.account_code
             if account not in account_start_mva:
                 account_start_mva[account] = Decimal("0")
             account_start_mva[account] += Decimal(str(holding.market_value_accrued or 0))
             
-        for security_code, holding in end_holdings.items():
+        for key, holding in end_holdings.items():
             account = holding.account_code
             if account not in account_end_mva:
                 account_end_mva[account] = Decimal("0")
@@ -429,22 +432,140 @@ ORDER BY "AsofDate", "AccountCode";""")
         print(f"💰 TOTAL End MVA: ${end_mva:,.2f} CAD")
 
         # Calculate net contributions from daily aggregate data
-        net_contribution = sum(Decimal(str(daily.net_cashflow or 0)) for daily in daily_agg_data)
-        print(f"\n💱 NET CONTRIBUTION CALCULATION:")
-        print("-" * 35)
-        print(f"   Net Contribution = Sum of daily net cash flows")
-        print(f"   This includes cash transfers in/out of accounts")
-        print(f"   (TSI, TSO, TCI, TCO, etc. - multiplier transactions)")
-        account_contributions = {}
-        for daily in daily_agg_data:
-            account = daily.account_code
-            if account not in account_contributions:
-                account_contributions[account] = Decimal("0")
-            account_contributions[account] += Decimal(str(daily.net_cashflow or 0))
+        print(f"\n💱 NET CONTRIBUTION DETAILED ANALYSIS:")
+        print("=" * 60)
+        
+        # Print SQL query for manual testing BEFORE calculating values
+        account_codes_str = "', '".join(account_codes)
+        
+        # Calculate net contribution directly from transactions using multiplier values
+        print(f"📊 CALCULATING NET CONTRIBUTION FROM MULTIPLIER TRANSACTIONS:")
+        print("-" * 50)
+        
+        # Net contribution types based on transaction_types.csv multipliers
+        net_contrib_in_types = ["CCR", "CRD", "SRD", "TCI", "TSI"]   # Multiplier = 1
+        net_contrib_out_types = ["CDR", "CWD", "SWD", "TCO", "TSO"]  # Multiplier = -1
+        
+        account_net_contributions = {}
+        account_transaction_details = {}
+        
+        # Process each transaction for net contribution calculation
+        for txn in transactions_data:
+            account = txn.account_code
             
-        for account, contrib in account_contributions.items():
-            print(f"   🏦 {account}: ${contrib:,.2f}")
-        print(f"💱 TOTAL Net Contribution: ${net_contribution:,.2f} CAD")
+            if account not in account_net_contributions:
+                account_net_contributions[account] = Decimal("0")
+                account_transaction_details[account] = []
+            
+            # Convert to CAD using FX rates - this is crucial for accurate net contribution
+            amount_cad = self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)
+            
+            # Check if this transaction affects net contribution
+            if txn.transaction_type_code in net_contrib_in_types:
+                # Multiplier = 1 (positive net contribution)
+                net_amount = Decimal(str(abs(amount_cad)))
+                account_net_contributions[account] += net_amount
+                account_transaction_details[account].append({
+                    'date': txn.trade_date,
+                    'type': txn.transaction_type_code,
+                    'symbol': txn.security_symbol,
+                    'amount_cad': net_amount,
+                    'flow': 'IN',
+                    'multiplier': 1,
+                    'original_currency': txn.settlement_currency,
+                    'original_amount': txn.settlement_amount,
+                    'fx_rate': fx_rates.get((txn.trade_date.strftime("%Y-%m-%d"), txn.settlement_currency), 1.0) if txn.settlement_currency != 'CAD' else 1.0
+                })
+                
+            elif txn.transaction_type_code in net_contrib_out_types:
+                # Multiplier = -1 (negative net contribution)
+                net_amount = -Decimal(str(abs(amount_cad)))
+                account_net_contributions[account] += net_amount
+                account_transaction_details[account].append({
+                    'date': txn.trade_date,
+                    'type': txn.transaction_type_code,
+                    'symbol': txn.security_symbol,
+                    'amount_cad': net_amount,
+                    'flow': 'OUT',
+                    'multiplier': -1,
+                    'original_currency': txn.settlement_currency,
+                    'original_amount': txn.settlement_amount,
+                    'fx_rate': fx_rates.get((txn.trade_date.strftime("%Y-%m-%d"), txn.settlement_currency), 1.0) if txn.settlement_currency != 'CAD' else 1.0
+                })
+        
+        # Calculate total net contribution from transactions (not daily aggregates)
+        net_contribution = sum(account_net_contributions.values())
+        
+        print(f"📊 NET CONTRIBUTION BY ACCOUNT (from transactions, sorted by date):")
+        print("-" * 50)
+        
+        for account in sorted(account_net_contributions.keys()):
+            account_contrib = account_net_contributions[account]
+            account_transactions = account_transaction_details[account]
+            
+            print(f"\n🏦 {account} NET CONTRIBUTION: ${account_contrib:,.2f}")
+            
+            if account_transactions:
+                # Sort transactions by date
+                sorted_transactions = sorted(account_transactions, key=lambda x: x['date'])
+                
+                print(f"   � Transaction Details ({len(sorted_transactions)} multiplier transactions):")
+                
+                for txn in sorted_transactions:
+                    flow_icon = "📈" if txn['flow'] == 'IN' else "📉"
+                    multiplier_text = f"(×{txn['multiplier']})"
+                    
+                    # Show FX conversion details for non-CAD transactions
+                    if txn['original_currency'] != 'CAD':
+                        fx_note = f" [{txn['original_currency']} {txn['original_amount']:,.2f} @ {txn['fx_rate']:.4f}]"
+                    else:
+                        fx_note = ""
+                    
+                    print(f"      {flow_icon} {txn['date']}: {txn['type']} {txn['symbol']} ${txn['amount_cad']:>12,.2f} {multiplier_text}{fx_note}")
+                
+                # Show summary by flow direction
+                cash_in_total = sum(t['amount_cad'] for t in sorted_transactions if t['flow'] == 'IN')
+                cash_out_total = sum(abs(t['amount_cad']) for t in sorted_transactions if t['flow'] == 'OUT')
+                
+                print(f"   💰 Total Cash/Security IN:  ${cash_in_total:,.2f}")
+                print(f"   💸 Total Cash/Security OUT: ${cash_out_total:,.2f}")
+                print(f"   🔄 Net Flow:                ${cash_in_total - cash_out_total:,.2f}")
+                
+                # Show transaction type breakdown
+                type_summary = {}
+                for txn in sorted_transactions:
+                    txn_type = txn['type']
+                    if txn_type not in type_summary:
+                        type_summary[txn_type] = {'count': 0, 'total': Decimal("0")}
+                    type_summary[txn_type]['count'] += 1
+                    type_summary[txn_type]['total'] += txn['amount_cad']
+                
+                if type_summary:
+                    print(f"   📋 Transaction Type Summary:")
+                    for txn_type, summary in sorted(type_summary.items()):
+                        print(f"      • {txn_type}: {summary['count']} transactions, ${summary['total']:,.2f}")
+                        
+                # Show FX impact summary for this account
+                fx_transactions = [t for t in sorted_transactions if t['original_currency'] != 'CAD']
+                if fx_transactions:
+                    print(f"   🌍 FX Conversion Summary:")
+                    fx_by_currency = {}
+                    for txn in fx_transactions:
+                        curr = txn['original_currency']
+                        if curr not in fx_by_currency:
+                            fx_by_currency[curr] = {'transactions': 0, 'original_total': Decimal("0"), 'cad_total': Decimal("0")}
+                        fx_by_currency[curr]['transactions'] += 1
+                        fx_by_currency[curr]['original_total'] += Decimal(str(txn['original_amount']))
+                        fx_by_currency[curr]['cad_total'] += abs(txn['amount_cad'])
+                    
+                    for curr, summary in fx_by_currency.items():
+                        avg_rate = summary['cad_total'] / summary['original_total'] if summary['original_total'] != 0 else 0
+                        print(f"      • {curr}: {summary['transactions']} txns, {curr} {summary['original_total']:,.2f} → CAD ${summary['cad_total']:,.2f} (avg rate: {avg_rate:.4f})")
+            else:
+                print(f"   ✅ No multiplier transactions affecting net contribution")
+        
+        print(f"\n💱 TOTAL Net Contribution (from transactions with FX conversion): ${net_contribution:,.2f} CAD")
+        print("=" * 60)
 
         # Calculate total gain/loss
         total_gain_loss = end_mva - start_mva - net_contribution
@@ -564,6 +685,40 @@ ORDER BY "AsofDate", "AccountCode";""")
         print(f"  🔄 Trading (No net contribution): {trading_types}")
         print()
 
+        # Add SQL query for detailed multiplier transaction analysis
+        account_codes_str = "', '".join({txn.account_code for txn in transactions_data})
+        multiplier_types = cash_in_types + cash_out_types
+        multiplier_types_str = "', '".join(multiplier_types)
+        
+        print(f"📋 SQL QUERY FOR NET CONTRIBUTION TRANSACTIONS:")
+        print("-" * 50)
+        print(f"""-- Transactions that affect Net Contribution (multiplier transactions)
+SELECT 
+    "TradeDate", 
+    "AccountCode", 
+    "SecuritySymbol", 
+    "TransactionTypeCode",
+    "SettlementAmount", 
+    "SettlementCurrency",
+    dt.multiplier,
+    CASE 
+        WHEN dt.multiplier = 1 THEN 'CASH/SECURITY IN (+)'
+        WHEN dt.multiplier = -1 THEN 'CASH/SECURITY OUT (-)'
+        ELSE 'NO NET CONTRIBUTION IMPACT'
+    END as contribution_type
+FROM phw_dev_gold.fact_transactions ft
+LEFT JOIN phw_dev_gold.dim_transaction_types dt ON ft."TransactionTypeCode" = dt."TransactionType"
+WHERE "TradeDate" BETWEEN '{start_date.strftime('%Y-%m-%d')}' AND '{end_date.strftime('%Y-%m-%d')}'
+AND "AccountCode" IN ('{account_codes_str}')
+AND "TransactionTypeCode" IN ('{multiplier_types_str}')
+ORDER BY "AccountCode", "TradeDate", "SettlementAmount" DESC;""")
+        print("-" * 50)
+        print()
+
+        # Track net contribution transactions by account
+        net_contrib_by_account = {}
+        net_contrib_transactions = []
+
         for txn in transactions_data:
             # Convert transaction amount to CAD
             amount_cad = self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)
@@ -601,6 +756,59 @@ ORDER BY "AsofDate", "AccountCode";""")
                 # Unclassified transaction - log for investigation
                 print(f"  ❓ Unclassified: [{txn.account_code}] {txn.security_symbol} {txn.transaction_type_code} ${amount_cad:,.2f}")
 
+        # After processing all transactions, show detailed net contribution analysis
+        print(f"\n🔍 NET CONTRIBUTION TRANSACTION ANALYSIS:")
+        print("=" * 60)
+        
+        # Calculate transaction-based net contribution by account
+        transaction_net_contrib_by_account = {}
+        for txn in transactions_data:
+            account = txn.account_code
+            if account not in transaction_net_contrib_by_account:
+                transaction_net_contrib_by_account[account] = Decimal("0")
+                
+            amount_cad = self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)
+            
+            if txn.transaction_type_code in cash_in_types:
+                transaction_net_contrib_by_account[account] += Decimal(str(abs(amount_cad)))
+            elif txn.transaction_type_code in cash_out_types:
+                transaction_net_contrib_by_account[account] -= Decimal(str(abs(amount_cad)))
+        
+        total_transaction_net_contrib = sum(transaction_net_contrib_by_account.values())
+        print(f"💱 Total from Net Contribution Transactions: ${total_transaction_net_contrib:,.2f}")
+        
+        for account in sorted(transaction_net_contrib_by_account.keys()):
+            account_contrib = transaction_net_contrib_by_account[account]
+            account_transactions = [txn for txn in transactions_data if txn.account_code == account and 
+                                  (txn.transaction_type_code in cash_in_types or txn.transaction_type_code in cash_out_types)]
+            
+            print(f"\n🏦 {account} Net Contribution from Transactions: ${account_contrib:,.2f}")
+            
+            if account_transactions:
+                print(f"   📊 Transaction Details ({len(account_transactions)} transactions):")
+                
+                # Sort by date and amount
+                sorted_txns = sorted(account_transactions, key=lambda x: x.trade_date)
+                
+                for txn in sorted_txns:
+                    amount_cad = self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)
+                    flow_icon = "📈" if txn.transaction_type_code in cash_in_types else "📉"
+                    flow_amount = abs(amount_cad) if txn.transaction_type_code in cash_in_types else -abs(amount_cad)
+                    currency_note = f" ({txn.settlement_currency} {txn.settlement_amount:,.2f})" if txn.settlement_currency != 'CAD' else ""
+                    print(f"      {flow_icon} {txn.trade_date}: {txn.transaction_type_code} {txn.security_symbol} ${flow_amount:>12,.2f}{currency_note}")
+                
+                # Show totals by flow direction
+                cash_in_total = sum(abs(self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)) 
+                                  for txn in account_transactions if txn.transaction_type_code in cash_in_types)
+                cash_out_total = sum(abs(self._convert_to_cad(txn.settlement_amount, txn.settlement_currency, txn.trade_date, fx_rates)) 
+                                   for txn in account_transactions if txn.transaction_type_code in cash_out_types)
+                
+                print(f"   💰 Total Cash IN:  ${cash_in_total:,.2f}")
+                print(f"   💸 Total Cash OUT: ${cash_out_total:,.2f}")
+                print(f"   🔄 Net Flow:       ${cash_in_total - cash_out_total:,.2f}")
+        
+        print("=" * 60)
+
         return income_total, fees_total, security_contributions
 
     def _convert_to_cad(self, amount, currency, date, fx_rates):
@@ -632,19 +840,19 @@ ORDER BY "AsofDate", "AccountCode";""")
 
         fx_gains = {}
 
-        # Get all securities that had holdings
-        all_securities = set(start_holdings.keys()) | set(end_holdings.keys())
+        # Get all securities that had holdings (use compound keys)
+        all_holdings_keys = set(start_holdings.keys()) | set(end_holdings.keys())
 
         start_date_str = start_date.strftime("%Y-%m-%d")
         end_date_str = end_date.strftime("%Y-%m-%d")
 
-        for security_code in all_securities:
-            start_holding = start_holdings.get(security_code)
-            end_holding = end_holdings.get(security_code)
+        for holding_key in all_holdings_keys:
+            security_code, account_code = holding_key  # Extract from compound key
+            start_holding = start_holdings.get(holding_key)
+            end_holding = end_holdings.get(holding_key)
 
             # Skip CAD securities (no FX impact)
             currency = None
-            account_code = None
             if start_holding:
                 currency = start_holding.security_currency_code
                 account_code = start_holding.account_code
@@ -653,7 +861,7 @@ ORDER BY "AsofDate", "AccountCode";""")
                 account_code = end_holding.account_code
 
             if currency == "CAD" or currency is None:
-                fx_gains[security_code] = Decimal("0")
+                fx_gains[holding_key] = Decimal("0")
                 continue
 
             # Get FX rates for start and end dates
@@ -665,7 +873,7 @@ ORDER BY "AsofDate", "AccountCode";""")
 
             if start_fx_rate is None or end_fx_rate is None:
                 print(f"⚠️  Missing FX rates for {security_code} ({currency}) in account {account_code}")
-                fx_gains[security_code] = Decimal("0")
+                fx_gains[holding_key] = Decimal("0")
                 continue
 
             # Calculate FX gain: (end_value_local / end_fx - start_value_local / start_fx) * (end_fx - start_fx)
@@ -683,7 +891,7 @@ ORDER BY "AsofDate", "AccountCode";""")
                 avg_local_position = (start_local + end_local) / 2
                 fx_gain = avg_local_position * fx_change
 
-                fx_gains[security_code] = fx_gain
+                fx_gains[holding_key] = fx_gain
 
                 if abs(fx_gain) > Decimal("0.01"):  # Only log meaningful amounts
                     symbol = (
@@ -701,7 +909,7 @@ ORDER BY "AsofDate", "AccountCode";""")
                     print(f"      Calculation: ${avg_local_position:,.2f} × {fx_change:+.4f} = ${fx_gain:,.2f}")
                     print()
             else:
-                fx_gains[security_code] = Decimal("0")
+                fx_gains[holding_key] = Decimal("0")
 
         return fx_gains
 
@@ -750,11 +958,22 @@ ORDER BY "AsofDate", "AccountCode";""")
             elif date_str == end_date.strftime("%Y-%m-%d"):
                 account_attributions[account_code]["end_mva"] += market_value
 
-        # Process daily aggregate data by account
-        for daily in daily_agg_data:
-            account_code = daily.account_code
+        # Process transaction-based net contribution by account (with FX conversion)
+        net_contrib_in_types = ["CCR", "CRD", "SRD", "TCI", "TSI"]   # Multiplier = 1
+        net_contrib_out_types = ["CDR", "CWD", "SWD", "TCO", "TSO"]  # Multiplier = -1
+        
+        for transaction in transactions_data:
+            account_code = transaction.account_code
             if account_code in account_attributions:
-                account_attributions[account_code]["net_contribution"] += Decimal(str(daily.net_cashflow or 0))
+                # Convert to CAD using FX rates for accurate net contribution
+                amount_cad = self._convert_to_cad(transaction.settlement_amount, transaction.settlement_currency, transaction.trade_date, fx_rates)
+                
+                if transaction.transaction_type_code in net_contrib_in_types:
+                    # Multiplier = 1 (positive net contribution)
+                    account_attributions[account_code]["net_contribution"] += Decimal(str(abs(amount_cad)))
+                elif transaction.transaction_type_code in net_contrib_out_types:
+                    # Multiplier = -1 (negative net contribution)
+                    account_attributions[account_code]["net_contribution"] -= Decimal(str(abs(amount_cad)))
 
         # Calculate total gain/loss by account
         for account_code in account_attributions:
@@ -1244,9 +1463,23 @@ ORDER BY "AsofDate", "AccountCode";""")
             for account_code, attr in account_attributions.items():
                 account_node_idx = current_node_idx
                 account_gain_loss = attr["total_gain_loss"]
+                account_end_value = attr["end_mva"]
+                
+                # Show account name with net gain/loss value in the label
+                # The node value should represent the account's contribution to total gain/loss
                 nodes.append(
-                    schemas.PerformanceNode(label=f"{account_code} (${account_gain_loss:,.0f})", category="account")
+                    schemas.PerformanceNode(
+                        label=f"{account_code} (${account_gain_loss:,.0f})", 
+                        category="account"
+                    )
                 )
+                print(f"🏦 Account {account_code}: End Value ${account_end_value:,.2f}, Gain/Loss ${account_gain_loss:,.2f}")
+                print(f"    Start: ${attr['start_mva']:,.2f}, Net Contrib: ${attr['net_contribution']:,.2f}")
+                print(f"    Income: ${attr['income']:,.2f}, Fees: ${attr['fees']:,.2f}")
+                print(f"    FX: ${attr['fx_gain']:,.2f}, Appreciation: ${attr['appreciation']:,.2f}")
+                print(f"    Calculation: ${attr['start_mva']:,.2f} + ${attr['net_contribution']:,.2f} + ${account_gain_loss:,.2f} = ${account_end_value:,.2f}")
+                print(f"    >>> Sankey will show account with net gain/loss in label: {account_code} (${account_gain_loss:,.0f})")
+                print()
 
                 # Link this account to appropriate attribution categories based on its composition
                 # IMPORTANT: Only create links if the account actually contributes to that category
@@ -1254,7 +1487,7 @@ ORDER BY "AsofDate", "AccountCode";""")
 
                 # Link to appreciation if this account has market appreciation
                 if attr["appreciation"] > 0 and "appreciation_gain" in attribution_node_map and appreciation_total > 0:
-                    # Scale the account's appreciation to ensure total flows balance
+                    # For gains: Flow FROM appreciation category TO account
                     scaled_value = float(attr["appreciation"])
                     links.append(
                         schemas.PerformanceLink(
@@ -1266,20 +1499,21 @@ ORDER BY "AsofDate", "AccountCode";""")
                     )
                     print(f"  📈 {account_code} Appreciation: ${scaled_value:,.2f}")
                 elif attr["appreciation"] < 0 and "appreciation_loss" in attribution_node_map and appreciation_total < 0:
+                    # For losses: Flow FROM account TO loss category (reverse direction)
                     scaled_value = float(abs(attr["appreciation"]))
                     links.append(
                         schemas.PerformanceLink(
-                            source=attribution_node_map["appreciation_loss"],
-                            target=account_node_idx,
+                            source=account_node_idx,
+                            target=attribution_node_map["appreciation_loss"],
                             value=scaled_value,
                             attribution_type="account_appreciation",
                         )
                     )
-                    print(f"  📉 {account_code} Depreciation: ${scaled_value:,.2f}")
+                    print(f"  📉 {account_code} Depreciation: ${scaled_value:,.2f} (flowing FROM account TO loss)")
 
                 # Link to income if this account has income
                 if attr["income"] > 0 and "income_gain" in attribution_node_map and income_total > 0:
-                    # Use actual account income value
+                    # For gains: Flow FROM income category TO account
                     scaled_value = float(attr["income"])
                     links.append(
                         schemas.PerformanceLink(
@@ -1293,19 +1527,21 @@ ORDER BY "AsofDate", "AccountCode";""")
 
                 # Link to fees if this account has fees
                 if attr["fees"] < 0 and "fees_loss" in attribution_node_map and fees_total < 0:
+                    # For losses: Flow FROM account TO fee loss category (reverse direction)
                     scaled_value = float(abs(attr["fees"]))
                     links.append(
                         schemas.PerformanceLink(
-                            source=attribution_node_map["fees_loss"],
-                            target=account_node_idx,
+                            source=account_node_idx,
+                            target=attribution_node_map["fees_loss"],
                             value=scaled_value,
                             attribution_type="account_fees",
                         )
                     )
-                    print(f"  💸 {account_code} Fees: ${scaled_value:,.2f}")
+                    print(f"  💸 {account_code} Fees: ${scaled_value:,.2f} (flowing FROM account TO loss)")
 
                 # Link to FX gains/losses if this account has FX impact
                 if attr["fx_gain"] > 0 and "fx_gain" in attribution_node_map:
+                    # For gains: Flow FROM FX gain category TO account
                     scaled_value = float(attr["fx_gain"])
                     links.append(
                         schemas.PerformanceLink(
@@ -1317,18 +1553,19 @@ ORDER BY "AsofDate", "AccountCode";""")
                     )
                     print(f"  🌍 {account_code} FX Gain: ${scaled_value:,.2f}")
                 elif attr["fx_gain"] < 0 and "fx_loss" in attribution_node_map:
+                    # For losses: Flow FROM account TO FX loss category (reverse direction)
                     scaled_value = float(abs(attr["fx_gain"]))
                     links.append(
                         schemas.PerformanceLink(
-                            source=attribution_node_map["fx_loss"],
-                            target=account_node_idx,
+                            source=account_node_idx,
+                            target=attribution_node_map["fx_loss"],
                             value=scaled_value,
                             attribution_type="account_fx",
                         )
                     )
-                    print(f"  🌍 {account_code} FX Loss: ${scaled_value:,.2f}")
+                    print(f"  🌍 {account_code} FX Loss: ${scaled_value:,.2f} (flowing FROM account TO loss)")
 
-                print(f"🏦 Added account {account_code}: ${account_gain_loss:,.2f}")
+                print(f"🏦 Added account {account_code}: Gain/Loss Contribution ${account_gain_loss:,.2f}")
                 current_node_idx += 1
 
         print(f"📊 Created {len(nodes)} nodes and {len(links)} links")

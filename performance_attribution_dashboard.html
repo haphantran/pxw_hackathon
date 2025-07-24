@@ -832,9 +832,10 @@ ORDER BY fx."AsofDate", fx."LocalCurrencyCode";`
             Plotly.newPlot('sankeyPlot', data, layout, config);
         }
 
-        // Initialize with example data
+        // Initialize with real data on page load
         document.addEventListener('DOMContentLoaded', function() {
-            showExampleData();
+            // Automatically load performance attribution data when page loads
+            loadPerformanceAttribution();
         });
     </script>
 </body>
